@@ -6,7 +6,9 @@ library(stringi)
 library(tm)
 library(tidyverse)
 library(feather)
+library(lubridate)
 
+#list of all the seasons.
 season_list <- read_html("http://snltranscripts.jt.org/") %>% 
   html_nodes(".c1+ .c1 .c1 > a") %>% 
   html_attr("href") %>% data.frame() %>% 
@@ -14,6 +16,7 @@ season_list <- read_html("http://snltranscripts.jt.org/") %>%
   slice(4:43) %>% 
   mutate_all(funs(season = as.character))
 
+#pulls a list of all episodes
 episdoes <- data.frame()
 for(i in 1:40) {
   data <- read_html(season_list$season[i]) %>%
@@ -44,9 +47,12 @@ for(i in 1:40) {
   print(i)
 }
 
+#cleans the urls structures up a bit
 episdoes$episode[1:24] <- paste("75/", episdoes$episode[1:24], sep = "")
 episdoes$episode[197:214] <- paste("85/", episdoes$episode[197:214], sep = "")
 
+
+#creates a list of transcripts from each episode
 l <- nrow(episdoes)
 tran_list <- data.frame()
 for(p in 130:l) {
@@ -85,14 +91,13 @@ for(p in 130:l) {
   Sys.sleep(.5)
 }
 
+#writing data in feather to local disc incase I accedently delete it
 write_feather(tran_list, "data/snl_trans_list.feather")
 
-l <- 150
+#loops through the list of every transcript on site and strucutres it in a dataframe
 l <- nrow(tran_list)
-
-
 tran_data <- data.frame()
-for(m in 774:l) {
+for(m in 1:l) {
   url <- tryCatch({read_html(paste0(as.character(tran_list$transcript[m])))}, error=function(err) "Error 404")
   if(url == "Error 404") {
     print(paste("skip", m))
@@ -154,12 +159,16 @@ for(m in 774:l) {
   }
 }
 
+#extracting some addition information out of transcript data
 tran_data$year <- str_extract(tran_data$url, "[0-9][0-9]")
 tran_data$format_year <- lapply(tran_data$year, snl_date_formating) %>% unlist()
 tran_data$season <- str_extract(as.character(tran_data$episode_num), ".*:") %>% str_replace(":", "")
 
-write_feather(tran_data, "data/snl_transcript.feather")
+#saving dataset before modifying it with joins
+write_feather(tran_data, "data/snl_transcript_two.feather")
 
+
+#downloading rating data from hhllcks github - he previous scrapped IMBD and another SNL website
 download.file("https://raw.githubusercontent.com/hhllcks/snldb/master/db/snl_rating.csv", "data/snl_ratings.csv")
 download.file("https://raw.githubusercontent.com/hhllcks/snldb/master/db/snl_episode.csv", "data/snl_episdoes_git.csv")
 snl_ratings <- read.csv("data/snl_ratings.csv") %>% 
@@ -168,10 +177,19 @@ snl_ratings <- read.csv("data/snl_ratings.csv") %>%
   mutate(epi_key = paste0(sid,"-",eid))
 snl_episodes_git <- read.csv("data/snl_episdoes_git.csv", stringsAsFactors = FALSE) %>% 
   mutate(epi_key = paste0(sid,"-",eid))
-
 snl_ratings <- left_join(snl_ratings, snl_episodes_git, by = c("epi_key" = "epi_key"))
 
-tran_episode_list <- data.frame(unique(tran_data$episode_num))
+#joining transcript data with list of transcripts for episode meta information
+tran_data_join <- left_join(tran_data, tran_list, by = c("url" = "transcript"))
 
-se <- html_session( "https://httpbin.org/user-agent" )
-se$response$request$options$useragent
+#creating unique key to combine episode ratings and transcript data
+snl_ratings$date_key <- mdy(snl_ratings$aired)
+tran_data_join$date_key <- mdy(tran_data_join$date)
+
+#join worked great!
+tran_data_ratings <- left_join(tran_data_join, snl_ratings, by = "date_key")
+
+
+#final dataset
+write_feather(tran_data_ratings, "data/tran_plus_ratings.feather")
+
